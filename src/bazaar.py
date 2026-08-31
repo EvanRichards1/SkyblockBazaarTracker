@@ -26,7 +26,7 @@ class BazaarTracker:
             print(f"{attempt_time}: Failed to fetch data: {e}")
             return {}
     
-    def _format_data(self, timestamp: dt.datetime, data: dist[str, Any]) -> tuple[dt.datetime, dict[str, tuple[pl.DataFrame, pl.DataFrame]]]:
+    def _format_data(self, timestamp: dt.datetime, data: dist[str, Any]) -> tuple[dict[str, tuple[pl.DataFrame, pl.DataFrame]], pl.DataFrame]:
         products = data.get("products")
 
         fmt_orders = {}
