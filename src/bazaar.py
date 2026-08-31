@@ -1,16 +1,19 @@
 import datetime as dt
 from typing import Any
 from pathlib import Path
+import threading
+from time import sleep
 
 import requests
 import polars as pl
 
 class BazaarTracker:
-    def __init__(self, base_url: str, bazaar_history = {}) -> None:
+    def __init__(self, base_url: str = "https://api.hypixel.net", bazaar_history = {}) -> None:
         self.base_url = base_url
         self.order_history: dict[dt.datetime, dict[str, tuple[pl.DataFrame, pl.DataFrame]]] = {}
         self.status_history: dict[dt.datetime, pl.DataFrame] = {}
-        self.latest_timestamp: dt.datetime = None
+        self.latest_timestamp: dt.datetime | None = None
+        self.alive: bool = False
     
     def _fetch_data(self) -> dict[str, Any]:
         attempt_time = dt.datetime.now()
@@ -62,6 +65,22 @@ class BazaarTracker:
                 self.status_history[timestamp] = status
                 self.latest_timestamp = timestamp
     
+    def _live_worker(self, gap: dt.time) -> None:
+        while self.alive:
+            self.update()
+
+            sleep_time = (dt.datetime.now() - self.latest_timestamp).seconds
+
+            sleep(max(0.2, sleep_time))
+    
+    def live(self, gap: dt.time = dt.time(second=10)) -> None:
+        self.alive = True
+        thread = threading.Thread(target=self._live_worker, args=(gap,))
+        thread.start()
+    
+    def stop(self) -> None:
+        self.alive = False
+    
     def save(self, filepath: str) -> None:
         save_path = Path(filepath)
 
@@ -75,3 +94,9 @@ class BazaarTracker:
                 order_books_path.mkdir(parents=True, exist_ok=True)
                 sell_orders.write_parquet(order_books_path / "sell.parquet")
                 buy_orders.write_parquet(order_books_path / "buy.parquet")
+
+    def get_latest_item_orders(self, product_id: str) -> pl.DataFrame:
+        return self.order_history[self.latest_timestamp][product_id.upper()]
+    
+    def get_latest_status(self) -> pl.DataFrame:
+        return self.status_history[self.latest_timestamp]
