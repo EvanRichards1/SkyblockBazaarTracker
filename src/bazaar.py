@@ -3,6 +3,7 @@ from typing import Any
 from pathlib import Path
 import threading
 from time import sleep
+from collections import deque
 
 import requests
 import polars as pl
@@ -12,7 +13,7 @@ class BazaarTracker:
         self.base_url = base_url
         self.order_history: dict[dt.datetime, dict[str, tuple[pl.DataFrame, pl.DataFrame]]] = {}
         self.status_history: dict[dt.datetime, pl.DataFrame] = {}
-        self.latest_timestamp: dt.datetime | None = None
+        self.window_timestamps = deque()
         self.alive: bool = False
     
     def _fetch_data(self) -> dict[str, Any]:
@@ -51,31 +52,37 @@ class BazaarTracker:
 
         return fmt_orders, statuses_df
 
-    def update(self) -> None:
+    def update(self, window: int = float('inf')) -> None:
         data = self._fetch_data()
         
         if data:
             unix_timestamp = int(data.get("lastUpdated"))
             timestamp = dt.datetime.fromtimestamp(unix_timestamp / 1000)
 
-            if not timestamp == self.latest_timestamp:
+            if not self.window_timestamps or not timestamp == self.window_timestamps[-1]:
                 orders, status = self._format_data(timestamp, data)
                 
                 self.order_history[timestamp] = orders
                 self.status_history[timestamp] = status
-                self.latest_timestamp = timestamp
-    
-    def _live_worker(self, gap: dt.time) -> None:
-        while self.alive:
-            self.update()
+                self.window_timestamps.append(timestamp)
 
-            sleep_time = (dt.datetime.now() - self.latest_timestamp).seconds
+                if len(self.window_timestamps) > window:
+                    remove_ts = self.window_timestamps.popleft()
+
+                    self.order_history.pop(remove_ts)
+                    self.status_history.pop(remove_ts)
+    
+    def _live_worker(self, gap: int, window: int) -> None:
+        while self.alive:
+            self.update(window=window)
+
+            sleep_time = gap - (dt.datetime.now() - self.window_timestamps[-1]).total_seconds()
 
             sleep(max(0.2, sleep_time))
     
-    def live(self, gap: dt.time = dt.time(second=10)) -> None:
+    def live(self, gap: int = 10, window: int = float('inf')) -> None:
         self.alive = True
-        thread = threading.Thread(target=self._live_worker, args=(gap,))
+        thread = threading.Thread(target=self._live_worker, args=(gap,window))
         thread.start()
     
     def stop(self) -> None:
@@ -96,7 +103,7 @@ class BazaarTracker:
                 buy_orders.write_parquet(order_books_path / "buy.parquet")
 
     def get_latest_item_orders(self, product_id: str) -> pl.DataFrame:
-        return self.order_history[self.latest_timestamp][product_id.upper()]
+        return self.order_history[self.window_timestamps[-1]][product_id.upper()]
     
     def get_latest_status(self) -> pl.DataFrame:
-        return self.status_history[self.latest_timestamp]
+        return self.status_history[self.window_timestamps[-1]]
